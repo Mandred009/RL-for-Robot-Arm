@@ -210,7 +210,7 @@ if __name__ == "__main__":
         #     # 'sideview', 'robot0_robotview', 'robot0_eye_in_hand')
             render_camera="agentview",  
             horizon=500,
-            control_freq=5,
+            control_freq=120,
         )
     test_env = PushAlign(
             robots="Panda",
@@ -223,7 +223,7 @@ if __name__ == "__main__":
         #     # 'sideview', 'robot0_robotview', 'robot0_eye_in_hand')
             render_camera="agentview",  
             horizon=500,
-            control_freq=5,
+            control_freq=120,
         )
     
     N_ACTIONS = 7
