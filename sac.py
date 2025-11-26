@@ -44,7 +44,10 @@ class SAC_ACTOR(nn.Module):
     def __init__(self, input_size, n_actions):
         super().__init__()
         self.base = nn.Sequential(
-            nn.Linear(input_size, 256),
+            nn.Linear(input_size, 512),
+            nn.LayerNorm(512),
+            nn.LeakyReLU(),
+            nn.Linear(512, 256),
             nn.LayerNorm(256),
             nn.LeakyReLU(),
             nn.Linear(256, 128),
@@ -52,12 +55,9 @@ class SAC_ACTOR(nn.Module):
             nn.LeakyReLU(),
             nn.Linear(128, 64),
             nn.LayerNorm(64),
-            nn.LeakyReLU(),
-            nn.Linear(64, 32),
-            nn.LayerNorm(32),
             nn.LeakyReLU()
         )
-        self.mu_head = nn.Linear(32, n_actions)  # Mean of the action distribution
+        self.mu_head = nn.Linear(64, n_actions)  # Mean of the action distribution
         self.log_std = nn.Parameter(torch.zeros(n_actions))  # Learnable log standard deviation
 
     def forward(self, x):
@@ -177,16 +177,16 @@ def test_agent(env, actor_net: SAC_ACTOR):
 # === MAIN TRAINING LOOP ===
 if __name__ == "__main__":
     # Hyperparameters
-    GAMMA = 0.99  # Discount factor for future rewards
+    GAMMA = 0.98  # Discount factor for future rewards
     LEARNING_RATE_ACTOR = 3e-4
     LEARNING_RATE_CRITIC = 3e-4
-    ENTROPY_ALPHA = 0.3  # Entropy regularization coefficient
+    ENTROPY_ALPHA = 0.5  # Entropy regularization coefficient
     ACTION_MIN = -1.57
     ACTION_MAX = 1.57
     MAX_BUFFER = 1000000
     MIN_BUFFER_TRAIN = 100000  # Minimum buffer size before training starts
     BATCH_SIZE = 64
-    TAU_SOFT_UP = 0.005  # Soft update coefficient
+    TAU_SOFT_UP = 0.008  # Soft update coefficient
     TEST_ITER = 100  # Test policy every N episodes
     NOT_OF_TEST_EPI = 3  # Number of test episodes for evaluation
     REWARD_LIMIT = 10  # Stop training if test reward exceeds this value
@@ -210,7 +210,7 @@ if __name__ == "__main__":
         #     # 'sideview', 'robot0_robotview', 'robot0_eye_in_hand')
             render_camera="agentview",  
             horizon=500,
-            control_freq=120,
+            control_freq=60,
         )
     test_env = PushAlign(
             robots="Panda",
@@ -223,7 +223,7 @@ if __name__ == "__main__":
         #     # 'sideview', 'robot0_robotview', 'robot0_eye_in_hand')
             render_camera="agentview",  
             horizon=500,
-            control_freq=120,
+            control_freq=60,
         )
     
     N_ACTIONS = 7
