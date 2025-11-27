@@ -114,7 +114,11 @@ class PPO:
     @torch.no_grad
     def play_episode(self):
         state = self.env.reset()
-        state=state['object-state']
+        state=np.concatenate([
+                state['robot0_proprio-state'].flatten(),
+                state['object-state'].flatten() 
+            ])
+        
         total_r = 0
         while True:
             s_tensor = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0).to(DEVICE)
@@ -125,12 +129,21 @@ class PPO:
 
             # Apply tanh to squash actions to [-1, 1] range
             action_env = torch.tanh(action).squeeze(0).cpu().numpy()
+            action_env = action_env * JOINT_LIMITS
+
+            if action_env[3] > 0: action_env[3] *= -1
+            if action_env[5] <= 0: action_env[5] *= -1 
+
             self.state.append(state)
             self.action.append(action.squeeze(0).cpu().numpy())  # raw action
             self.log_prob.append(log_prob.item())
 
             next_state, reward, terminated,_= self.env.step(action_env)
-            next_state=next_state['object-state']
+            next_state=np.concatenate([
+                next_state['robot0_proprio-state'].flatten(),
+                next_state['object-state'].flatten() 
+            ])
+
             self.reward.append(reward)
             total_r += reward
 
@@ -151,15 +164,28 @@ def test_agent(env, actor_net: PPO_ACTOR):
 
     for t in range(NO_OF_TEST_EPI):
         print(f"test:{t}")
-        state, _ = env.reset()
-        state=state['object-state']
+        state = env.reset()
+        state=np.concatenate([
+                state['robot0_proprio-state'].flatten(),
+                state['object-state'].flatten() 
+            ])
+        
         while True:
             s_tensor = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0).to(DEVICE)
             mu, std = actor_net(s_tensor)
             action = torch.tanh(mu).squeeze(0).cpu().numpy()
 
+            action = action * JOINT_LIMITS
+
+            if action[3] > 0: action[3] *= -1
+            if action[5] <= 0: action[5] *= -1 
+
             next_state, reward, is_done, _ = env.step(action)
-            next_state=next_state['object-state']
+            next_state=np.concatenate([
+                next_state['robot0_proprio-state'].flatten(),
+                next_state['object-state'].flatten() 
+            ])
+
             if is_done:
                 break
             state = next_state
@@ -175,18 +201,22 @@ if __name__ == "__main__":
     GAE_LAMBDA = 0.95
     LEARNING_RATE_ACTOR = 0.0001
     LEARNING_RATE_CRITIC = 0.001
-    TRAJECTORY_SIZE = 8049
+    TRAJECTORY_SIZE = 8192
     PPO_EPSILON = 0.2
-    PPO_EPOCHS = 100
+    PPO_EPOCHS = 10
     PPO_BATCH_SIZE = 64
-    TEST_EPS = 100
+    TEST_EPS = 20
     NO_OF_TEST_EPI = 3
     REWARD_LIMIT = 10
+
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    JOINT_LIMITS = np.array([2.5, 1.57, 2.5, 3.14, 2.5, 3.14, 2.5])
+    
     print(f"Training on {DEVICE}")
 
     # Directory to save models
-    save_path = os.path.join("saves")
+    save_path = os.path.join("saves2")
     os.makedirs(save_path, exist_ok=True)
 
     # Environment setup
@@ -200,9 +230,9 @@ if __name__ == "__main__":
             use_object_obs=True,
             # Available "camera" names = ('frontview', 'birdview', 'agentview', 
         #     # 'sideview', 'robot0_robotview', 'robot0_eye_in_hand')
-            render_camera="agentview",  
+            render_camera="frontview",  
             horizon=500,
-            control_freq=25,
+            control_freq=20,
         )
     test_env = PushAlign(
             robots="Panda",
@@ -215,11 +245,25 @@ if __name__ == "__main__":
         #     # 'sideview', 'robot0_robotview', 'robot0_eye_in_hand')
             render_camera="agentview",  
             horizon=500,
-            control_freq=25,
+            control_freq=20,
         )
     
+    state=env.reset()
+
+    state=np.concatenate([
+
+                state['robot0_proprio-state'].flatten(),
+
+                state['object-state'].flatten() 
+
+            ])
+
+
     N_ACTIONS = 7
-    OBS_SPACE_SHAPE = 9
+
+    OBS_SPACE_SHAPE = state.shape[0]
+
+    print(OBS_SPACE_SHAPE)
 
     # Initialize networks and optimizers
     actor_net = PPO_ACTOR(OBS_SPACE_SHAPE , N_ACTIONS).to(DEVICE)
@@ -228,13 +272,13 @@ if __name__ == "__main__":
     print(f"The actor net architecture: {actor_net}")
     print(f"The critic net architecture: {critic_net}")
 
-    actor_optimizer = optim.Adam(actor_net.parameters(), lr=LEARNING_RATE_ACTOR)
-    critic_optimizer = optim.Adam(critic_net.parameters(), lr=LEARNING_RATE_CRITIC)
+    actor_optimizer = optim.AdamW(actor_net.parameters(), lr=LEARNING_RATE_ACTOR)
+    critic_optimizer = optim.AdamW(critic_net.parameters(), lr=LEARNING_RATE_CRITIC)
 
     ppo_agent = PPO(env, actor_net, critic_net)
     writer = SummaryWriter(comment="-PPO_ALGO")
 
-    best_reward = 0
+    best_reward = -np.inf
     start_time = time.time()
 
     # Main training loop
@@ -281,7 +325,7 @@ if __name__ == "__main__":
                 # === Critic Update ===
                 critic_optimizer.zero_grad()
                 values = critic_net(b_states).squeeze(-1)
-                loss_value = F.mse_loss(values, b_ref)
+                loss_value = F.smooth_l1_loss(values, b_ref)
                 loss_value.backward()
                 torch.nn.utils.clip_grad_norm_(critic_net.parameters(), 1.0)
                 critic_optimizer.step()

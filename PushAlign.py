@@ -115,24 +115,22 @@ class PushAlign(ManipulationEnv):
         # --- 3. Calculate Orientation Reward (Z-angle) ---
         rotation = R.from_quat(push_obj_quat[[1, 2, 3, 0]]) # Convert MuJoCo (w,x,y,z) to Scipy (x,y,z,w)
         z_angle = rotation.as_euler('xyz', degrees=False)[2]
-        angle_error = np.arctan2(np.sin(z_angle - self.target_angle), np.cos(z_angle - self.target_angle))
+
+        angle_error = np.sin(z_angle)-np.sin(self.target_angle)
         orientation_reward = -np.abs(angle_error) # Negative error
         
         eef_id=list(self.robots[0].eef_site_id.values())[0]
         gripper_loc=np.array(self.sim.data.site_xpos[eef_id])
-        # print(gripper_loc)
-        # print(push_obj_pos)
-        # print(self.target_pos)
-        # print(self.robots[0].eef_site_id.values()[0])
+
         
         gripper_error=-np.linalg.norm(gripper_loc-push_obj_pos)
         
         # --- 4. Combine Rewards ---
-        reward = (0.3 * pos_reward) + (0.1 * orientation_reward) + (0.6*gripper_error)
+        reward = (0.5 * pos_reward) + (0.3 * orientation_reward) + (0.2*gripper_error)
         # print(f"pos: {pos_reward} || ori: {orientation_reward} || grip: {gripper_error}")
         
         if self._check_success():
-            reward += 10.0
+            reward += 100.0
 
         # Scale reward if requested
         if self.reward_scale is not None:
@@ -202,9 +200,9 @@ class PushAlign(ManipulationEnv):
             sampler=UniformRandomSampler(
                 name="ObjectPushSampler",
                 mujoco_objects=self.object_to_push,
-                x_range=[-0.3, 0.1],
-                y_range=[-0.3, 0.1],
-                rotation=[-np.pi, np.pi],
+                x_range=[0.0, 0.1],
+                y_range=[-0.1, 0.0],
+                rotation=[0.1, np.pi],
                 rotation_axis='z',
                 ensure_object_boundary_in_range=False,
                 ensure_valid_placement=True,
