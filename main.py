@@ -26,6 +26,7 @@ env = PushAlign(
 
 env.reset()
 env.render()
+r_tot=0
 
 for i in range(1000):
     
@@ -37,12 +38,13 @@ for i in range(1000):
     obs, reward, done, info = env.step(action)
     # print(obs)
     # print(i)
-    print(reward)
+    # print(reward)
+    r_tot+=reward
 
     env.render()
 
     if done:
-        print("Episode finished. Resetting.")
+        print(f"Episode finished. Resetting. Reward={r_tot}")
         env.reset()
 
 env.close()
