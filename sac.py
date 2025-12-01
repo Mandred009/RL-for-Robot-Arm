@@ -38,6 +38,7 @@ class ExperienceReplay:
         return [self.buffer[idx] for idx in indices]
 
 # === SAC Actor Network with Proper Action Bounds ===
+# === SAC Actor Network with Proper Action Bounds ===
 class SAC_ACTOR(nn.Module):
     def __init__(self, input_size, n_actions, action_bounds):
         super().__init__()
@@ -94,6 +95,18 @@ class SAC_ACTOR(nn.Module):
         
         return scaled_action, log_prob, raw_action
 
+    @torch.no_grad()
+    def get_deterministic_action(self, state):
+        """Returns the mean action (mu) for deterministic testing."""
+        mu, _ = self.forward(state)
+        action = torch.tanh(mu) # Just squash the mean
+        
+        # Scale to actual action bounds
+        self.action_low = self.action_low.to(state.device)
+        self.action_high = self.action_high.to(state.device)
+        scaled_action = self.action_low + (action + 1) * 0.5 * (self.action_high - self.action_low)
+        return scaled_action
+
 # === SAC Critic Network ===
 class SAC_CRITIC(nn.Module):
     def __init__(self, input_size, n_actions):
@@ -148,6 +161,7 @@ class EntropyAlpha:
         return alpha_loss.item()
 
 # === SAC Agent with Exploration ===
+# === SAC Agent with Exploration ===
 class SAC:
     def __init__(self, env, net: SAC_ACTOR, buffer: ExperienceReplay, action_bounds, device='cpu'):
         self.env = env
@@ -159,6 +173,7 @@ class SAC:
         self.steps = 0
         self.total_steps = 0  # Track total steps for exploration decay
 
+    # The add_exploration_noise method is now unused, but kept for reference
     def add_exploration_noise(self, action, exploration_steps=50000):
         """Add exploration noise that decays over time"""
         noise_scale = max(0.1, 1.0 - self.total_steps / exploration_steps)
@@ -179,12 +194,11 @@ class SAC:
         
         while True:
             s_tensor = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0).to(self.device)
-            action, _, _ = self.net.sample(s_tensor)
+            # SAC explores by sampling from the policy distribution (stochastic action)
+            action, _, _ = self.net.sample(s_tensor) 
             action = action.squeeze(0).cpu().numpy()
             
-            # Add exploration noise during training
-            if add_noise:
-                action = self.add_exploration_noise(action)
+            # Explicit DDPG-style noise is removed here.
             
             next_state, reward, is_done, _ = self.env.step(action)
             next_state = np.concatenate([
@@ -223,6 +237,7 @@ def soft_update(target_net: nn.Module, source_net: nn.Module, tau=0.005):
         target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
 
 # === Test Agent ===
+# === Test Agent ===
 @torch.no_grad()
 def test_agent(env, actor_net: SAC_ACTOR, num_episodes=3):
     total_r = 0
@@ -239,7 +254,11 @@ def test_agent(env, actor_net: SAC_ACTOR, num_episodes=3):
         
         while True:
             s_tensor = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0).to(DEVICE)
-            action, _, _ = actor_net.sample(s_tensor)
+            
+            # *** CRITICAL CHANGE: Use deterministic action for evaluation ***
+            action = actor_net.get_deterministic_action(s_tensor) 
+            # ***************************************************************
+            
             action = action.squeeze(0).cpu().numpy()
 
             next_state, reward, is_done, _ = env.step(action)
@@ -277,20 +296,20 @@ class LRScheduler:
 # === MAIN TRAINING LOOP ===
 if __name__ == "__main__":
     # Hyperparameters
-    GAMMA = 0.99
+    GAMMA = 0.98
     LEARNING_RATE_ACTOR = 3e-4
     LEARNING_RATE_CRITIC = 3e-4
     LEARNING_RATE_ALPHA = 3e-4
     MAX_BUFFER = 1000000
-    MIN_BUFFER_TRAIN = 100
-    BATCH_SIZE = 256
+    MIN_BUFFER_TRAIN = 20000
+    BATCH_SIZE = 512
     TAU_SOFT_UP = 0.005
-    TEST_ITER = 10
+    TEST_ITER = 20
     NOT_OF_TEST_EPI = 3
-    REWARD_LIMIT = 10000
+    REWARD_LIMIT = 100000
     EXPLORATION_STEPS = 50000
-    UPDATE_EVERY = 1  # Update networks every N steps
-    GRADIENT_STEPS = 1  # Number of gradient steps per update
+    UPDATE_EVERY = 2  # Update networks every N steps
+    GRADIENT_STEPS = 2  # Number of gradient steps per update
 
     # Define proper action bounds
     ACTION_BOUNDS = {
@@ -353,9 +372,9 @@ if __name__ == "__main__":
     target_critic_q2.load_state_dict(critic_net_q2.state_dict())
 
     # === Optimizers and Schedulers ===
-    actor_optimizer = optim.Adam(actor_net.parameters(), lr=LEARNING_RATE_ACTOR)
-    critic_optimizer_q1 = optim.Adam(critic_net_q1.parameters(), lr=LEARNING_RATE_CRITIC)
-    critic_optimizer_q2 = optim.Adam (critic_net_q2.parameters(), lr=LEARNING_RATE_CRITIC)
+    actor_optimizer = optim.AdamW(actor_net.parameters(), lr=LEARNING_RATE_ACTOR)
+    critic_optimizer_q1 = optim.AdamW(critic_net_q1.parameters(), lr=LEARNING_RATE_CRITIC)
+    critic_optimizer_q2 = optim.AdamW (critic_net_q2.parameters(), lr=LEARNING_RATE_CRITIC)
     
     actor_scheduler = LRScheduler(actor_optimizer, LEARNING_RATE_ACTOR)
     critic_scheduler_q1 = LRScheduler(critic_optimizer_q1, LEARNING_RATE_CRITIC)
@@ -407,7 +426,7 @@ if __name__ == "__main__":
             # Update Q1
             critic_optimizer_q1.zero_grad()
             current_q1 = critic_net_q1(states_t, actions_t)
-            critic_loss_q1 = F.mse_loss(current_q1, target_q)
+            critic_loss_q1 = F.smooth_l1_loss(current_q1, target_q)
             critic_loss_q1.backward()
             torch.nn.utils.clip_grad_norm_(critic_net_q1.parameters(), 1.0)
             critic_optimizer_q1.step()
@@ -415,7 +434,7 @@ if __name__ == "__main__":
             # Update Q2
             critic_optimizer_q2.zero_grad()
             current_q2 = critic_net_q2(states_t, actions_t)
-            critic_loss_q2 = F.mse_loss(current_q2, target_q)
+            critic_loss_q2 = F.smooth_l1_loss(current_q2, target_q)
             critic_loss_q2.backward()
             torch.nn.utils.clip_grad_norm_(critic_net_q2.parameters(), 1.0)
             critic_optimizer_q2.step()

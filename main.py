@@ -45,6 +45,7 @@ for i in range(1000):
 
     if done:
         print(f"Episode finished. Resetting. Reward={r_tot}")
+        r_tot=0
         env.reset()
 
 env.close()

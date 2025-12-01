@@ -100,43 +100,48 @@ class PushAlign(ManipulationEnv):
         )
 
     def reward(self, action=None):
-        """
-        Reward function for the Push-to-Pose task.
-        Reads directly from the simulation state.
-        """
-        # --- 1. Get object's current pose from self.sim ---
+        # --- 1. Get State ---
         push_obj_pos = np.array(self.sim.data.xpos[self.push_obj_body_id])
         push_obj_quat = np.array(self.sim.data.xquat[self.push_obj_body_id])
+        eef_id = list(self.robots[0].eef_site_id.values())[0]
+        gripper_loc = np.array(self.sim.data.site_xpos[eef_id])
 
-        # --- 2. Calculate Position Reward (2D distance) ---
-        pos_error = np.linalg.norm(push_obj_pos[:2] - self.target_pos)
-        pos_reward = -pos_error  # Negative error is a good reward
+        # --- 2. Reaching Reward (Shaped) ---
+        # We use tanh so the max reward is 1.0 when touching, 0.0 when far.
+        # We strictly limit how much this contributes so it doesn't overpower pushing.
+        dist_to_obj = np.linalg.norm(gripper_loc - push_obj_pos)
+        reach_reward = 1 - np.tanh(dist_to_obj)
 
-        # --- 3. Calculate Orientation Reward (Z-angle) ---
-        rotation = R.from_quat(push_obj_quat[[1, 2, 3, 0]]) # Convert MuJoCo (w,x,y,z) to Scipy (x,y,z,w)
-        z_angle = rotation.as_euler('xyz', degrees=False)[2]
+        # --- 3. Position Reward (Pushing) ---
+        # Reward based on how close object is to target
+        dist_to_target = np.linalg.norm(push_obj_pos[:2] - self.target_pos)
+        push_reward = 1 - np.tanh(dist_to_target)
 
-        angle_error = np.sin(z_angle)-np.sin(self.target_angle)
-        orientation_reward = -np.abs(angle_error) # Negative error
+        # --- 4. Orientation Reward (Cosine Similarity) ---
+        # Convert quat to Z-rotation safely
+        rotation = R.from_quat(push_obj_quat[[1, 2, 3, 0]])
+        obj_z_angle = rotation.as_euler('xyz', degrees=False)[2]
         
-        eef_id=list(self.robots[0].eef_site_id.values())[0]
-        gripper_loc=np.array(self.sim.data.site_xpos[eef_id])
+        # Cosine distance: 1.0 if aligned, -1.0 if opposite
+        # We map it to [0, 1] range: (cos(diff) + 1) / 2
+        angle_diff = obj_z_angle - self.target_angle
+        ori_reward = np.cos(angle_diff)
 
+        # --- 5. Total Reward Combination ---
+        # STAGE 1: Reach the object (Max 0.1)
+        # STAGE 2: Push the object (Max 0.5)
+        # STAGE 3: Align the object (Max 0.4)
         
-        gripper_error=-np.linalg.norm(gripper_loc-push_obj_pos)
-        
-        # --- 4. Combine Rewards ---
-        reward = (0.5 * pos_reward) + (0.3 * orientation_reward) + (0.2 * gripper_error)
-        # print(f"pos: {pos_reward} || ori: {orientation_reward} || grip: {gripper_error}")
-        
+        # We encourage pushing ONLY if we are somewhat close to the object
+        # We encourage aligning ONLY if we are somewhat close to the target
+        # print(f"{reach_reward},{push_reward},{ori_reward}")
+        total_reward = (0.2 * reach_reward) + (0.5 * push_reward) + (0.3 * ori_reward)
+
+        # Sparse success bonus (Small enough to not break SAC, big enough to matter)
         if self._check_success():
-            reward += 100.0
+            total_reward += 5.0 
 
-        # Scale reward if requested
-        # if self.reward_scale is not None:
-        #     reward *= self.reward_scale
-            
-        return reward
+        return total_reward
 
     def _load_model(self):
         """
@@ -200,9 +205,9 @@ class PushAlign(ManipulationEnv):
             sampler=UniformRandomSampler(
                 name="ObjectPushSampler",
                 mujoco_objects=self.object_to_push,
-                x_range=[0.0, 0.2],
-                y_range=[-0.1, 0.0],
-                rotation=[0.01, np.pi/2],
+                x_range=[0.1, 0.1],
+                y_range=[-0.1, -0.1],
+                rotation=[np.pi/2, np.pi/2],
                 rotation_axis='z',
                 ensure_object_boundary_in_range=False,
                 ensure_valid_placement=True,
@@ -235,46 +240,40 @@ class PushAlign(ManipulationEnv):
         # self.grip_site_id=self.sim.model.site_name2id(self.robots[0].eef_site_name)
         
     def _setup_observables(self):
-        """
-        Sets up observables to be used for this environment.
-        """
         observables = super()._setup_observables()
 
-        # low-level object information
         if self.use_object_obs:
             modality = "object"
 
+            # 1. Absolute Object Position
             @sensor(modality=modality)
             def push_obj_pos(obs_cache):
                 return np.array(self.sim.data.body_xpos[self.push_obj_body_id])
 
+            # 2. Continuous Orientation (Sin/Cos) - Better than Euler
             @sensor(modality=modality)
-            def push_obj_quat(obs_cache):
-                tmp=convert_quat(np.array(self.sim.data.body_xquat[self.push_obj_body_id]), to="xyzw")
+            def push_obj_trig(obs_cache):
+                tmp = convert_quat(np.array(self.sim.data.body_xquat[self.push_obj_body_id]), to="xyzw")
                 rot = R.from_quat(tmp)
-                rot_euler = rot.as_euler('xyz', degrees=True)
-                return rot_euler
-            
+                z_angle = rot.as_euler('xyz', degrees=False)[2]
+                return np.array([np.sin(z_angle), np.cos(z_angle)])
+
+            # 3. Key Vector: Gripper to Object (Crucial for Reaching)
             @sensor(modality=modality)
-            def target_obj(obs_cache):
-                return np.array(self.target_pos)
-            
+            def gripper_to_obj(obs_cache):
+                eef_id = list(self.robots[0].eef_site_id.values())[0]
+                gripper_loc = np.array(self.sim.data.site_xpos[eef_id])
+                obj_loc = np.array(self.sim.data.body_xpos[self.push_obj_body_id])
+                return obj_loc - gripper_loc
+
+            # 4. Key Vector: Object to Target (Crucial for Pushing)
             @sensor(modality=modality)
-            def target_obj_rot(obs_cache):
-                return np.array(self.target_angle)
+            def obj_to_target(obs_cache):
+                obj_loc = np.array(self.sim.data.body_xpos[self.push_obj_body_id])
+                # We only care about XY for the target vector usually
+                return self.target_pos - obj_loc[:2]
 
-            sensors = [push_obj_pos, push_obj_quat]
-            
-            arm_prefixes = self._get_arm_prefixes(self.robots[0], include_robot_name=False)
-            full_prefixes = self._get_arm_prefixes(self.robots[0])
-
-            # sensors += [
-            #     self._get_obj_eef_sensor(full_pf, "push_obj_pos", f"{arm_pf}gripper_to_push_obj_pos", modality)
-            #     for arm_pf, full_pf in zip(arm_prefixes, full_prefixes)
-            # ]
-            sensors.append(target_obj)
-            sensors.append(target_obj_rot)
-
+            sensors = [push_obj_pos, push_obj_trig, gripper_to_obj, obj_to_target]
             names = [s.__name__ for s in sensors]
 
             for name, s in zip(names, sensors):
@@ -299,28 +298,29 @@ class PushAlign(ManipulationEnv):
     def _check_success(self):
         """
         Check if the object is at the target pose.
+        SYNCHRONIZED with improved reward logic.
         """
         # --- 1. Get object's current pose from self.sim ---
         push_obj_pos = np.array(self.sim.data.xpos[self.push_obj_body_id])
         push_obj_quat = np.array(self.sim.data.xquat[self.push_obj_body_id])
 
-        # --- 2. Calculate Position Reward (2D distance) ---
+        # --- 2. Calculate Position Error (2D distance) ---
         pos_error = np.linalg.norm(push_obj_pos[:2] - self.target_pos)
 
-        # --- 3. Calculate Orientation Reward (Z-angle) ---
-        rotation = R.from_quat(push_obj_quat[[1, 2, 3, 0]]) # Convert MuJoCo (w,x,y,z) to Scipy (x,y,z,w)
+        # --- 3. Calculate Orientation Alignment (Cosine Similarity) ---
+        rotation = R.from_quat(push_obj_quat[[1, 2, 3, 0]])
         z_angle = rotation.as_euler('xyz', degrees=False)[2]
 
-        angle_error = np.sin(z_angle)-np.sin(self.target_angle)
+        angle_diff = z_angle - self.target_angle
+        # Alignment is np.cos(angle_diff). 1.0 is perfect alignment.
+        alignment = np.cos(angle_diff)
 
-        pos_aligned=False
-        ang_aligned=False
+        # --- 4. Define Success Thresholds ---
+        POS_THRESHOLD = 0.03  # 2 cm distance
+        ORI_THRESHOLD = 0.98 
 
-        if pos_error<=0.03:
-            pos_aligned=True
-        if angle_error<=0.03:
-            ang_aligned=True
-
+        pos_aligned = (pos_error <= POS_THRESHOLD)
+        ang_aligned = (alignment >= ORI_THRESHOLD)
 
         return pos_aligned and ang_aligned
 
