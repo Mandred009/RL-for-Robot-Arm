@@ -37,8 +37,7 @@ class ExperienceReplay:
         indices = np.random.choice(len(self.buffer), batch_size, replace=False)
         return [self.buffer[idx] for idx in indices]
 
-# === SAC Actor Network with Proper Action Bounds ===
-# === SAC Actor Network with Proper Action Bounds ===
+# === SAC Actor Network===
 class SAC_ACTOR(nn.Module):
     def __init__(self, input_size, n_actions, action_bounds):
         super().__init__()
@@ -74,7 +73,7 @@ class SAC_ACTOR(nn.Module):
         x = self.base(x)
         mu = self.mu_head(x)
         log_std = self.log_std_head(x)
-        log_std = torch.clamp(log_std, -20, 2)  # Prevent numerical instability
+        log_std = torch.clamp(log_std, -20, 2) 
         std = torch.exp(log_std)
         return mu, std
     
@@ -99,7 +98,7 @@ class SAC_ACTOR(nn.Module):
     def get_deterministic_action(self, state):
         """Returns the mean action (mu) for deterministic testing."""
         mu, _ = self.forward(state)
-        action = torch.tanh(mu) # Just squash the mean
+        action = torch.tanh(mu)
         
         # Scale to actual action bounds
         self.action_low = self.action_low.to(state.device)
@@ -144,7 +143,7 @@ class SAC_CRITIC(nn.Module):
 # === Learnable Entropy Temperature ===
 class EntropyAlpha:
     def __init__(self, action_dim, initial_value=0.2, lr=3e-4, device='cpu'):
-        self.target_entropy = -action_dim  # Heuristic: -dim(A)
+        self.target_entropy = -action_dim 
         self.log_alpha = torch.tensor(np.log(initial_value), requires_grad=True, device=device)
         self.optimizer = optim.Adam([self.log_alpha], lr=lr)
         self.device = device
@@ -161,7 +160,6 @@ class EntropyAlpha:
         return alpha_loss.item()
 
 # === SAC Agent with Exploration ===
-# === SAC Agent with Exploration ===
 class SAC:
     def __init__(self, env, net: SAC_ACTOR, buffer: ExperienceReplay, action_bounds, device='cpu'):
         self.env = env
@@ -171,9 +169,8 @@ class SAC:
         self.device = device
         self.total_r = 0
         self.steps = 0
-        self.total_steps = 0  # Track total steps for exploration decay
+        self.total_steps = 0 
 
-    # The add_exploration_noise method is now unused, but kept for reference
     def add_exploration_noise(self, action, exploration_steps=50000):
         """Add exploration noise that decays over time"""
         noise_scale = max(0.1, 1.0 - self.total_steps / exploration_steps)
@@ -194,11 +191,9 @@ class SAC:
         
         while True:
             s_tensor = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0).to(self.device)
-            # SAC explores by sampling from the policy distribution (stochastic action)
+
             action, _, _ = self.net.sample(s_tensor) 
             action = action.squeeze(0).cpu().numpy()
-            
-            # Explicit DDPG-style noise is removed here.
             
             next_state, reward, is_done, _ = self.env.step(action)
             next_state = np.concatenate([
@@ -237,7 +232,6 @@ def soft_update(target_net: nn.Module, source_net: nn.Module, tau=0.005):
         target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
 
 # === Test Agent ===
-# === Test Agent ===
 @torch.no_grad()
 def test_agent(env, actor_net: SAC_ACTOR, num_episodes=3):
     total_r = 0
@@ -255,9 +249,7 @@ def test_agent(env, actor_net: SAC_ACTOR, num_episodes=3):
         while True:
             s_tensor = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0).to(DEVICE)
             
-            # *** CRITICAL CHANGE: Use deterministic action for evaluation ***
             action = actor_net.get_deterministic_action(s_tensor) 
-            # ***************************************************************
             
             action = action.squeeze(0).cpu().numpy()
 
@@ -474,7 +466,6 @@ if __name__ == "__main__":
                 writer.add_scalar("train/q1_mean", current_q1.mean().item(), update_count)
                 writer.add_scalar("train/q2_mean", current_q2.mean().item(), update_count)
                 
-                # Log gradient norms
                 for name, param in actor_net.named_parameters():
                     if param.grad is not None:
                         writer.add_histogram(f'gradients/actor_{name}', param.grad, update_count)
