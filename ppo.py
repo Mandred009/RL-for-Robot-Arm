@@ -10,7 +10,7 @@ from PushAlign import PushAlign
 import robosuite as suite
 import os
 
-# === Normalization Utilities (New) ===
+# === Normalization Utilities  ===
 class RunningMeanStd:
     """Tracks the mean and variance of a data stream."""
     def __init__(self, shape):
@@ -72,7 +72,7 @@ class NormalizedEnv:
         next_state_vec = self._flatten(next_state)
         return self._normalize(next_state_vec), reward, done, info
 
-# === Networks (Unchanged) ===
+# === Networks ===
 class PPO_ACTOR(nn.Module):
     def __init__(self, input_size, n_actions):
         super().__init__()
@@ -121,7 +121,7 @@ class PPO_CRITIC(nn.Module):
     def forward(self, x):
         return self.model(x)
 
-# === PPO Agent (Corrected) ===
+# === PPO Agent ===
 class PPO:
     def __init__(self, env, act_net:PPO_ACTOR, crt_net:PPO_CRITIC):
         self.state = []
@@ -153,7 +153,6 @@ class PPO:
         with torch.no_grad():
             value_v = self.crt_net(states_v)
             values = value_v.squeeze().cpu().numpy()
-            # Append 0.0 for the bootstrap value of the last step
             values = np.append(values, 0.0) 
 
         gae = 0.0
@@ -177,7 +176,7 @@ class PPO:
 
     @torch.no_grad
     def play_episode(self):
-        state = self.env.reset() # Env now handles flattening/normalization
+        state = self.env.reset() 
         
         total_r = 0
         while True:
@@ -195,9 +194,6 @@ class PPO:
             # Apply tanh for env action
             action_tanh = torch.tanh(raw_action).squeeze(0).cpu().numpy()
             action_env = action_tanh * JOINT_LIMITS
-
-            # Logic Note: Removed manual sign flipping. 
-            # The network + tanh + limits should learn the correct direction.
 
             self.state.append(state)
             self.action.append(raw_action.squeeze(0).cpu().numpy()) # Store RAW action
@@ -224,12 +220,12 @@ def test_agent(env, actor_net: PPO_ACTOR):
     actor_net.eval()
 
     for t in range(NO_OF_TEST_EPI):
-        state = env.reset() # Env handles flattening/normalization
+        state = env.reset()
         
         while True:
             s_tensor = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0).to(DEVICE)
             mu, std = actor_net(s_tensor)
-            # Deterministic action for test: use Mean, then Tanh
+
             action = torch.tanh(mu).squeeze(0).cpu().numpy()
             action = action * JOINT_LIMITS
 
@@ -270,7 +266,6 @@ if __name__ == "__main__":
     # Initialize Controller config
     controller_config = suite.controllers.load_composite_controller_config(controller="WHOLE_BODY_IK")
     
-    # 1. Init Raw Envs to get shape
     raw_env = PushAlign(
             robots="Panda",
             controller_configs=controller_config,
@@ -283,7 +278,6 @@ if __name__ == "__main__":
             control_freq=20,
         )
     
-    # Determine obs shape
     temp_state = raw_env.reset()
     obs_dim = np.concatenate([
         temp_state['robot0_proprio-state'].flatten(),
@@ -291,10 +285,10 @@ if __name__ == "__main__":
     ]).shape[0]
     N_ACTIONS=7
     
-    # 2. Wrap Training Env
+    # Wrap Training Env
     env = NormalizedEnv(raw_env, obs_shape=obs_dim, training=True)
     
-    # 3. Setup Test Env (sharing RMS stats)
+    # Setup Test Env 
     raw_test_env = PushAlign(
             robots="Panda",
             controller_configs=controller_config,
@@ -379,7 +373,7 @@ if __name__ == "__main__":
                 # === Critic Update ===
                 critic_optimizer.zero_grad()
                 values = critic_net(b_states).squeeze(-1)
-                loss_value = F.mse_loss(values, b_ref) # MSE is standard for Critic
+                loss_value = F.mse_loss(values, b_ref)
                 loss_value.backward()
                 torch.nn.utils.clip_grad_norm_(critic_net.parameters(), 1.0)
                 critic_optimizer.step()
