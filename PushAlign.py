@@ -134,7 +134,7 @@ class PushAlign(ManipulationEnv):
         
         # We encourage pushing ONLY if we are somewhat close to the object
         # We encourage aligning ONLY if we are somewhat close to the target
-        # print(f"{reach_reward},{push_reward},{ori_reward}")
+
         total_reward = (0.2 * reach_reward) + (0.5 * push_reward) + (0.3 * ori_reward)
 
         # Sparse success bonus (Small enough to not break SAC, big enough to matter)
@@ -237,7 +237,6 @@ class PushAlign(ManipulationEnv):
         gripper_joint_names = default_gripper.joints
         self.g_joint_ids = [self.sim.model.joint_name2id(jnt) for jnt in gripper_joint_names]
         self.gripper_qpos_addr = [self.sim.model.jnt_qposadr[idx] for idx in self.g_joint_ids]
-        # self.grip_site_id=self.sim.model.site_name2id(self.robots[0].eef_site_name)
         
     def _setup_observables(self):
         observables = super()._setup_observables()
