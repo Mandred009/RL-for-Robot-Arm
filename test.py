@@ -8,9 +8,8 @@ import time
 import os
 from PushAlign import PushAlign 
 import robosuite as suite
-# Assuming ppo.py contains PPO_ACTOR class definition
 from ppo import PPO_ACTOR 
-# Assuming sac is not used for PPO testing, removing SAC import reference
+
 
 # --- Normalization Utilities (Required for Testing) ---
 class RunningMeanStd:
@@ -49,38 +48,32 @@ class NormalizedEnv:
         return self._normalize(next_state_vec), reward, done, info
 
 
-# --- Test Agent (Corrected to use NormalizedEnv) ---
+# --- Test Agent  ---
 @torch.no_grad()
 def test_agent(env, actor_net: nn.Module):
     total_r = 0
     actor_net.eval()
     
-    # Resetting the normalized env returns the correct state
     state = env.reset()
     
     for t in range(NO_OF_TESTS):
         print(f"test:{t}")
-        # Re-initialize state for the start of the episode
         state = env.reset() 
         current_episode_reward = 0
         
         while True:
-            # State is already normalized here
+
             s_tensor = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0).to(DEVICE)
             
-            # PPO_ACTOR outputs (mu, std), but we only need mu for deterministic testing
             mu, _ = actor_net(s_tensor) 
             
             # Apply Tanh to squashed the action to [-1, 1]
             action = torch.tanh(mu).squeeze(0).cpu().numpy()
             action = action * JOINT_LIMITS
             
-            # The environment logic below (sign flips) is generally discouraged as it conflicts 
-            # with the training signal, but preserved as per your request for the test script.
             if action[3] > 0: action[3] *= -1
             if action[5] <= 0: action[5] *= -1 
 
-            # Step the normalized environment
             next_state, reward, is_done, _ = env.step(action)
 
             if is_done:
@@ -93,25 +86,22 @@ def test_agent(env, actor_net: nn.Module):
 
     return total_r / NO_OF_TESTS
 
-# --- Main Execution ---
+
 if __name__=="__main__":
-    # --- Configuration ---
-    NO_OF_TESTS=3 # Increased for better average
+
+    NO_OF_TESTS=3
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Testing on {DEVICE}")
     JOINT_LIMITS = np.array([2.5, 1.57, 2.5, 3.14, 2.5, 3.14, 2.5])
     
-    # --- Checkpoint Path ---
     CHECKPOINT_PATH = "/home/kuka/Documents/frl_proj/Learning-to-Push---Deep-Reinforcement-Learning-main/saves3/best_reward_-180.28.pt"
     
-    # 1. Load the entire checkpoint dictionary
     try:
         checkpoint = torch.load(CHECKPOINT_PATH, weights_only=False)
     except FileNotFoundError:
         print(f"ERROR: Checkpoint file not found at {CHECKPOINT_PATH}")
         exit()
 
-    # 2. Extract Normalization Statistics
     OBS_SPACE_SHAPE = checkpoint['rms_mean'].shape[0]
     
     rms = RunningMeanStd(OBS_SPACE_SHAPE)
@@ -120,7 +110,6 @@ if __name__=="__main__":
     rms.count = checkpoint['rms_count']
     print(f"RMS Stats Loaded. OBS Shape: {OBS_SPACE_SHAPE}")
 
-    # 3. Setup Environment
     controller_config = suite.controllers.load_composite_controller_config(controller="WHOLE_BODY_IK")
     raw_env = PushAlign(
             robots="Panda",
@@ -133,17 +122,13 @@ if __name__=="__main__":
             horizon=500,
             control_freq=20,
         )
-    
-    # 4. Wrap Environment for Normalization
+
     env = NormalizedEnv(raw_env, rms_obj=rms)
     
-    # 5. Initialize and Load Actor Network
     N_ACTIONS = 7
     ppo_agent = PPO_ACTOR(OBS_SPACE_SHAPE, N_ACTIONS).to(DEVICE)
     
-    # Load the actor's state dictionary from the checkpoint
     ppo_agent.load_state_dict(checkpoint['actor_state'])
     
-    # 6. Test
     avg_reward = test_agent(env, ppo_agent)
     print(f"\nAverage Test Reward over {NO_OF_TESTS} episodes: {avg_reward:.2f}")
