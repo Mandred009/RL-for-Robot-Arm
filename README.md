@@ -27,3 +27,11 @@ https://drive.google.com/file/d/1XyBCPBdta29xblYCtIrkrQSIhehyxUYX/view?usp=shari
 
 ## **Demo:** Following is the GIF for the robot attempting to push the block using SAC algorithm.
 ![Demo Gif](https://github.com/user-attachments/assets/f007ac6d-7bb4-46de-983f-81fa0569e125)
+
+## **Citation:**
+@inproceedings{robosuite2020,
+  title={robosuite: A Modular Simulation Framework and Benchmark for Robot Learning},
+  author={Yuke Zhu and Josiah Wong and Ajay Mandlekar and Roberto Mart\'{i}n-Mart\'{i}n and Abhishek Joshi and Soroush Nasiriany and Yifeng Zhu and Kevin Lin},
+  booktitle={arXiv preprint arXiv:2009.12293},
+  year={2020}
+}
